@@ -171,7 +171,7 @@ function get_method_from_registry(pspec, registry, root)
                 @warn("Invalid registry entry for $(pspec.name).")
             end
         else
-            @warn("$(pspec.name) ($(uuid)) not found in registry.")
+            @info("$(pspec.name) ($(uuid)) not found in documentation registry.")
         end
     else
         @warn("No registry found. Falling back to `vendored` docs.")
@@ -216,16 +216,16 @@ function rewrite_makefile(makefile)
                     name, arg = argument.args
                     # assure that we generate HTML
                     if name == :format
-                        argument.args[2] = :(Documenter.HTML())
+                        html = :(Documenter.HTML())
+                        if Meta.isexpr(arg, :call) && arg.args[1] == :(Documenter.HTML)
+                            append!(html.args, arg.args[2:end])
+                        end
+                        argument.args[2] = html
                     end
                     # filter out root + build dir
                     if name == :build
                         # if there is a custom build folder, record it!
                         cd(dirname(makefile)) do
-                            # uhm, joinpath(path1, path2) doesn't work...
-                            # considering splitting this mayself, but this seems
-                            # to be the easiest way to get the abspath respecting
-                            # build path needs to be relative to root path
                             buildpath = abspath(arg)
                         end
                     end
@@ -453,7 +453,8 @@ function build_documentation(uuid, name, url, version;
                              basepath = joinpath(@__DIR__, ".."),
                              envpath = normpath(joinpath(@__DIR__, "..")),
                              juliacmd = first(Base.julia_cmd()),
-                             registry_path = "")
+                             registry_path = "",
+                             deployment_url = "")
     workerfile = joinpath(@__DIR__, "worker_work.jl")
     buildpath = joinpath(basepath, "build")
     logpath = joinpath(basepath, "logs")
@@ -464,7 +465,7 @@ function build_documentation(uuid, name, url, version;
     builddir = joinpath(buildpath, get_docs_dir(name, uuid), string(version))
     isdir(builddir) || mkpath(builddir)
     logfile = joinpath(logpath, "$(name)-$(uuid) $version.log")
-    cmd = `$(juliacmd) --project=$(envpath) --color=no --compiled-modules=no -O0 $workerfile $uuid $name $url $version $builddir $registry_path`
+    cmd = `$(juliacmd) --project=$(envpath) --color=no --compiled-modules=no -O0 $workerfile $uuid $name $url $version $builddir $registry_path $deployment_url`
     process, task = run_with_timeout(cmd, log=logfile, name = string("docs build for package ", name, " (", uuid, ")"))
     return process
 end
@@ -478,7 +479,8 @@ function build_documentations(
         basepath = joinpath(@__DIR__, ".."),
         envpath = normpath(joinpath(@__DIR__, "..")),
         filter_versions = last,
-        sync_registry = true
+        sync_registry = true,
+        deployment_url = "pkg.julialang.org/docs"
     )
     regpath = download_registry(basepath, sync = sync_registry)
 
@@ -498,11 +500,15 @@ function build_documentations(
         process = nothing
         if !haskey(package, :latest_docs_version)
             for version in vcat(filter_versions(sort(package.versions, rev=true)))
-                process = build_documentation(uuid, package.name, package.url, version, envpath = envpath, basepath = basepath, juliacmd = juliacmd, registry_path = regpath)
+                process = build_documentation(uuid, package.name, package.url, version, envpath = envpath,
+                                                    basepath = basepath, juliacmd = juliacmd,
+                                                    registry_path = regpath, deployment_url = deployment_url)
                 push!(process_queue, process)
             end
         else
-            process = build_documentation(uuid, package.name, package.repo, package.latest_docs_version, envpath = envpath, basepath = basepath, juliacmd = juliacmd, registry_path = regpath)
+            process = build_documentation(uuid, package.name, package.repo, package.latest_docs_version,
+                                                envpath = envpath, basepath = basepath, juliacmd = juliacmd,
+                                                registry_path = regpath, deployment_url = deployment_url)
             push!(process_queue, process)
         end
     end
